@@ -1,0 +1,913 @@
+---
+title: "project"
+author: "Zijian Han"
+date: "December 12, 2017"
+output: html_document
+---
+
+
+```{r}
+# Load library
+source("func.R")
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+library(ROCR)
+library(caret)
+```
+
+
+```{r}
+# Read data
+df <- read.csv("dataset_22nov17.txt",header=TRUE, sep="", quote="")
+df <- df[,-1] ; colnames(df)[1] <- "Sentence_num"
+
+# In df, we have 4 variables for now, with 66161 tokens in 2999 sentences 
+```
+
+###############################
+## Explanatory Data Analysis ##
+###############################
+```{r}
+# Let's get rid of the "O" class and take a look at the meaningful classes
+df_sub <- df[-which(df$Tag == "O"),]
+
+df_plot1 <- df_sub %>% group_by(Tag) %>%summarise(Tag_count=n())
+
+ggplot(df_plot1, aes(reorder(Tag, Tag_count),Tag_count)) + geom_bar(stat = "identity",fill = "indianred3",alpha = 0.8) + theme_minimal() +xlab("Tag-class") +
+ylab("Number of Tags")+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15),axis.text.x = element_text(size = 15,angle = 45),axis.text.y = element_text(size = 15))+coord_flip() + ggtitle("Frequency of Tags")
+# Classes are really imbalance in our dataset
+# This could be harmful for XGBoost classifier.
+
+df_plot2 <- df_sub %>% group_by(POS) %>%summarise(POS_count=n())
+df_plot2 <- df_plot2[-which(df_plot2$POS_count<100),]
+
+ggplot(df_plot2, aes(reorder(POS, POS_count),POS_count)) + geom_bar(stat = "identity",fill = "orange3",alpha = 0.8) + theme_minimal() +xlab("POS-class") +
+ylab("Number of POSs")+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15),axis.text.x = element_text(size = 15,angle = 45),axis.text.y = element_text(size = 15))+coord_flip() + ggtitle("Frequency of POSs (Top 7 POS)")
+
+ggplot(df_sub,aes(Tag,Sentence_num))+geom_boxplot( fill="steelblue") + theme_minimal() +xlab("Tag-class") +
+ylab("Sentence number") +
+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15),axis.text.x = element_text(size = 15,angle = 45),axis.text.y = element_text(size = 15)) + ggtitle("Sentence position of Tags")
+# Looks like the sentence number have some effects on the Tag, but not much
+
+df_plot3 <- df_sub %>% group_by(Tag,POS) %>%summarise(Tag_count=n())
+df_plot3 <- df_plot3[which(df_plot3$POS == "CD"|df_plot3$POS == "IN"|df_plot3$POS == "JJ"|df_plot3$POS == "NN"|df_plot3$POS == "NNP"|df_plot3$POS == "NNPS"|df_plot3$POS == "NNS"),]
+
+ggplot(df_plot3, aes(Tag, Tag_count,fill = POS)) + geom_bar(stat = "identity",position = "fill")+scale_fill_brewer(palette = "Set1")+ theme_minimal() +xlab("Tag-class") +
+ylab("Frequency of POS") +
+theme(legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15),axis.text.x = element_text(size = 15,angle = 45),axis.text.y = element_text(size = 15)) + ggtitle("Frequency of POS for Tags")
+
+
+#write.csv(df,"df")
+
+```
+
+
+########################## MODEL EVALUATION #####################
+
+
+##################################
+## XGBoost using Original data  ##
+##################################
+
+```{r}
+# Load the pred probability from XGBoost model
+result_df <- NULL
+
+B_art <- read.csv("./plain/pred_result_B-art.csv")
+result_df$B_art_p <- B_art$pred
+result_df$B_art_cp <- B_art$pred_cal
+
+I_gpe <- read.csv("./plain/pred_result_I-gpe.csv")
+result_df$I_gpe_p <- I_gpe$pred
+result_df$I_gpe_cp <- I_gpe$pred_cal
+
+I_nat <- read.csv("./plain/pred_result_I-nat.csv")
+result_df$I_nat_p <- I_nat$pred
+result_df$I_nat_cp <- I_nat$pred_cal
+
+I_org <- read.csv("./plain/pred_result_I-org.csv")
+result_df$I_org_p <- I_org$pred
+result_df$I_org_cp <- I_org$pred_cal
+
+I_art <- read.csv("./plain/pred_result_I-art.csv")
+result_df$I_art_p <- I_art$pred
+result_df$I_art_cp <- I_art$pred_cal
+
+I_per <- read.csv("./plain/pred_result_I-per.csv")
+result_df$I_per_p <- I_per$pred
+result_df$I_per_cp <- I_per$pred_cal
+
+I_geo <- read.csv("./plain/pred_result_I-geo.csv")
+result_df$I_geo_p <- I_geo$pred
+result_df$I_geo_cp <- I_geo$pred_cal
+
+B_nat <- read.csv("./plain/pred_result_B-nat.csv")
+result_df$B_nat_p <- B_nat$pred
+result_df$B_nat_cp <- B_nat$pred_cal
+
+B_geo <- read.csv("./plain/pred_result_B-geo.csv")
+result_df$B_geo_p <- B_geo$pred
+result_df$B_geo_cp <- B_geo$pred_cal
+
+B_gpe <- read.csv("./plain/pred_result_B-gpe.csv")
+result_df$B_gpe_p <- B_gpe$pred
+result_df$B_gpe_cp <- B_gpe$pred_cal
+
+B_eve <- read.csv("./plain/pred_result_B-eve.csv")
+result_df$B_eve_p <- B_eve$pred
+result_df$B_eve_cp <- B_eve$pred_cal
+
+B_org <- read.csv("./plain/pred_result_B-org.csv")
+result_df$B_org_p <- B_org$pred
+result_df$B_org_cp <- B_org$pred_cal
+
+B_per <- read.csv("./plain/pred_result_B-per.csv")
+result_df$B_per_p <- B_per$pred
+result_df$B_per_cp <- B_per$pred_cal
+
+I_tim <- read.csv("./plain/pred_result_I-tim.csv")
+result_df$I_tim_p <- I_tim$pred
+result_df$I_tim_cp <- I_tim$pred_cal
+
+B_tim <- read.csv("./plain/pred_result_B-tim.csv")
+result_df$B_tim_p <- B_tim$pred
+result_df$B_tim_cp <- B_tim$pred_cal
+
+I_eve <- read.csv("./plain/pred_result_I-eve.csv")
+result_df$I_eve_p <- I_eve$pred
+result_df$I_eve_cp <- I_eve$pred_cal
+
+
+df_result <- as.data.frame(result_df)
+df_result_p <- df_result[,seq(1,31,2)]
+df_result_cp <- df_result[,seq(2,32,2)]
+
+test_data <- read.csv("./plain/test_data.csv")
+```
+
+
+## Draw Roc Curve
+```{r}
+colnames(df_result_p)
+roc_xgb.data.B_art_p <- extract_evaluation(tagName = "B-art",colname = "B_art_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_gpe_p <- extract_evaluation(tagName = "I-gpe",colname = "I_gpe_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_nat_p <- extract_evaluation(tagName = "I-nat",colname = "I_nat_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_org_p <- extract_evaluation(tagName = "I-org",colname = "I_org_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_art_p <- extract_evaluation(tagName = "I-art",colname = "I_art_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_per_p <- extract_evaluation(tagName = "I-per",colname = "I_per_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_geo_p <- extract_evaluation(tagName = "I-geo",colname = "I_geo_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_nat_p <- extract_evaluation(tagName = "B-nat",colname = "B_nat_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_geo_p <- extract_evaluation(tagName = "B-geo",colname = "B_geo_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_gpe_p <- extract_evaluation(tagName = "B-gpe",colname = "B_gpe_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_eve_p <- extract_evaluation(tagName = "B-eve",colname = "B_eve_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_org_p <- extract_evaluation(tagName = "B-org",colname = "B_org_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_per_p <- extract_evaluation(tagName = "B-per",colname = "B_per_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_tim_p <- extract_evaluation(tagName = "I-tim",colname = "I_tim_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.B_tim_p <- extract_evaluation(tagName = "B-tim",colname = "B_tim_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.I_eve_p <- extract_evaluation(tagName = "I-eve",colname = "I_eve_p",test_data = test_data, result_data = df_result_p)
+
+cols <- c("b-art" = "antiquewhite4", "b-eve" = "cadetblue4", "b-geo" = "aquamarine4", "b-gpe" = "chartreuse3", "b-nat" = "chocolate3", "b-org" = "cornflowerblue", "b-per" = "brown3", "b-tim" = "darkgoldenrod3", "i-art" = "darkseagreen3", "i-eve" = "goldenrod3", "i-geo" = "gray", "i-gpe" = "deeppink3", "i-nat" = "lightsalmon", "i-org" = "limegreen", "i-per" = "magenta", "i-tim" = "navyblue")
+
+# Creat roc curve for each class
+proc <- ggplot() + 
+geom_line(data = roc_xgb.data.B_art_p, aes(x=fpr, y=tpr,colour = "b-art"),lwd = 1) + 
+geom_line(data = roc_xgb.data.B_eve_p, aes(x=fpr, y=tpr,colour = "b-eve"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_geo_p, aes(x=fpr, y=tpr,colour = "b-geo"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_gpe_p, aes(x=fpr, y=tpr,colour = "b-gpe"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_nat_p, aes(x=fpr, y=tpr,colour = "b-nat"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_org_p, aes(x=fpr, y=tpr,colour = "b-org"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_per_p, aes(x=fpr, y=tpr,colour = "b-per"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_tim_p, aes(x=fpr, y=tpr,colour = "b-tim"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_art_p, aes(x=fpr, y=tpr,colour = "i-art"),lwd = 1) + 
+geom_line(data = roc_xgb.data.I_eve_p, aes(x=fpr, y=tpr,colour = "i-eve"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_geo_p, aes(x=fpr, y=tpr,colour = "i-geo"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_gpe_p, aes(x=fpr, y=tpr,colour = "i-gpe"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_nat_p, aes(x=fpr, y=tpr,colour = "i-nat"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_org_p, aes(x=fpr, y=tpr,colour = "i-org"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_per_p, aes(x=fpr, y=tpr,colour = "i-per"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_tim_p, aes(x=fpr, y=tpr,colour = "i-tim"),lwd = 1) +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() + #set themes
+scale_colour_manual(name = "Labels", values = cols) + 
+xlab("False Positive Rate") +
+ylab("True Positive Rate") +
+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+proc
+```
+
+
+### Confusion matrix
+```{r}
+draw_confusion_matrix(tagName = "B-art",colname = "B_art_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "antiquewhite4")
+
+draw_confusion_matrix(tagName = "I-gpe",colname = "I_gpe_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "deeppink3")
+
+draw_confusion_matrix(tagName = "I-nat",colname = "I_nat_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "lightsalmon")
+
+draw_confusion_matrix(tagName = "I-org",colname = "I_org_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "limegreen")
+
+draw_confusion_matrix(tagName = "I-art",colname = "I_art_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "darkseagreen3")
+
+draw_confusion_matrix(tagName = "I-per",colname = "I_per_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "magenta")
+
+
+draw_confusion_matrix(tagName = "I-geo",colname = "I_geo_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "gray")
+
+draw_confusion_matrix(tagName = "B-geo",colname = "B_geo_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "aquamarine4")
+
+draw_confusion_matrix(tagName = "B-gpe",colname = "B_gpe_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "chartreuse3")
+
+draw_confusion_matrix(tagName = "B-eve",colname = "B_eve_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "cadetblue4")
+
+draw_confusion_matrix(tagName = "B-org",colname = "B_org_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "cornflowerblue")
+
+draw_confusion_matrix(tagName = "B-per",colname = "B_per_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "brown3")
+
+draw_confusion_matrix(tagName = "I-tim",colname = "I_tim_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "navyblue")
+
+draw_confusion_matrix(tagName = "B-tim",colname = "B_tim_p",test_data = test_data, result_data = df_result_p,thresh = 1.0,color = "darkgoldenrod3")
+
+draw_confusion_matrix(tagName = "I-eve",colname = "I_eve_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "goldenrod3")
+
+draw_confusion_matrix(tagName = "B-nat",colname = "B_nat_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "chocolate3")
+
+```
+
+# Draw Precision curve
+```{r}
+prec_xgb.data.B_art_p <- precision_curve(tagName = "B-art",colname = "B_art_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_gpe_p <- precision_curve(tagName = "I-gpe",colname = "I_gpe_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_nat_p <- precision_curve(tagName = "I-nat",colname = "I_nat_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_org_p <- precision_curve(tagName = "I-org",colname = "I_org_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_art_p <- precision_curve(tagName = "I-art",colname = "I_art_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_per_p <- precision_curve(tagName = "I-per",colname = "I_per_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_geo_p <- precision_curve(tagName = "I-geo",colname = "I_geo_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_nat_p <- precision_curve(tagName = "B-nat",colname = "B_nat_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_geo_p <- precision_curve(tagName = "B-geo",colname = "B_geo_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_gpe_p <- precision_curve(tagName = "B-gpe",colname = "B_gpe_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_eve_p <- precision_curve(tagName = "B-eve",colname = "B_eve_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_org_p <- precision_curve(tagName = "B-org",colname = "B_org_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_per_p <- precision_curve(tagName = "B-per",colname = "B_per_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_tim_p <- precision_curve(tagName = "I-tim",colname = "I_tim_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.B_tim_p <- precision_curve(tagName = "B-tim",colname = "B_tim_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.I_eve_p <- precision_curve(tagName = "I-eve",colname = "I_eve_p",test_data = test_data, result_data = df_result_p)
+
+prec <- ggplot() + 
+geom_line(data = prec_xgb.data.B_art_p, aes(x=x, y=y,colour = "b-art"),lwd = 1) + 
+geom_line(data = prec_xgb.data.B_eve_p, aes(x=x, y=y,colour = "b-eve"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_geo_p, aes(x=x, y=y,colour = "b-geo"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_gpe_p, aes(x=x, y=y,colour = "b-gpe"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_nat_p, aes(x=x, y=y,colour = "b-nat"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_org_p, aes(x=x, y=y,colour = "b-org"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_per_p, aes(x=x, y=y,colour = "b-per"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_tim_p, aes(x=x, y=y,colour = "b-tim"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_art_p, aes(x=x, y=y,colour = "i-art"),lwd = 1) + 
+geom_line(data = prec_xgb.data.I_eve_p, aes(x=x, y=y,colour = "i-eve"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_geo_p, aes(x=x, y=y,colour = "i-geo"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_gpe_p, aes(x=x, y=y,colour = "i-gpe"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_nat_p, aes(x=x, y=y,colour = "i-nat"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_org_p, aes(x=x, y=y,colour = "i-org"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_per_p, aes(x=x, y=y,colour = "i-per"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_tim_p, aes(x=x, y=y,colour = "i-tim"),lwd = 1) +
+xlab("Cutoff") +
+ylab("Precision") +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() +
+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+prec
+```
+
+
+## Draw Recall curve
+```{r}
+rec_xgb.data.B_art_p <- recall_curve(tagName = "B-art",colname = "B_art_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_gpe_p <- recall_curve(tagName = "I-gpe",colname = "I_gpe_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_nat_p <- recall_curve(tagName = "I-nat",colname = "I_nat_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_org_p <- recall_curve(tagName = "I-org",colname = "I_org_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_art_p <- recall_curve(tagName = "I-art",colname = "I_art_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_per_p <- recall_curve(tagName = "I-per",colname = "I_per_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_geo_p <- recall_curve(tagName = "I-geo",colname = "I_geo_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_nat_p <- recall_curve(tagName = "B-nat",colname = "B_nat_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_geo_p <- recall_curve(tagName = "B-geo",colname = "B_geo_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_gpe_p <- recall_curve(tagName = "B-gpe",colname = "B_gpe_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_eve_p <- recall_curve(tagName = "B-eve",colname = "B_eve_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_org_p <- recall_curve(tagName = "B-org",colname = "B_org_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_per_p <- recall_curve(tagName = "B-per",colname = "B_per_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_tim_p <- recall_curve(tagName = "I-tim",colname = "I_tim_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.B_tim_p <- recall_curve(tagName = "B-tim",colname = "B_tim_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.I_eve_p <- recall_curve(tagName = "I-eve",colname = "I_eve_p",test_data = test_data, result_data = df_result_p)
+
+rec <- ggplot() + 
+geom_line(data = rec_xgb.data.B_art_p, aes(x=x, y=y,colour = "b-art"),lwd = 1) + 
+geom_line(data = rec_xgb.data.B_eve_p, aes(x=x, y=y,colour = "b-eve"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_geo_p, aes(x=x, y=y,colour = "b-geo"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_gpe_p, aes(x=x, y=y,colour = "b-gpe"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_nat_p, aes(x=x, y=y,colour = "b-nat"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_org_p, aes(x=x, y=y,colour = "b-org"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_per_p, aes(x=x, y=y,colour = "b-per"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_tim_p, aes(x=x, y=y,colour = "b-tim"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_art_p, aes(x=x, y=y,colour = "i-art"),lwd = 1) + 
+geom_line(data = rec_xgb.data.I_eve_p, aes(x=x, y=y,colour = "i-eve"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_geo_p, aes(x=x, y=y,colour = "i-geo"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_gpe_p, aes(x=x, y=y,colour = "i-gpe"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_nat_p, aes(x=x, y=y,colour = "i-nat"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_org_p, aes(x=x, y=y,colour = "i-org"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_per_p, aes(x=x, y=y,colour = "i-per"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_tim_p, aes(x=x, y=y,colour = "i-tim"),lwd = 1) +
+xlab("Cutoff") +
+ylab("Recall") +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() +
+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+rec
+```
+
+
+####################
+## Combined data  ##
+####################
+
+## Creat Combine Data
+```{r}
+df <- read.csv("df_features.csv")
+
+art_idx <- which(df$Tag == "B-art"|df$Tag == "I-art")
+eve_idx <- which(df$Tag == "B-eve"|df$Tag == "I-eve")
+geo_idx <- which(df$Tag == "B-geo"|df$Tag == "I-geo")
+gpe_idx <- which(df$Tag == "B-gpe"|df$Tag == "I-gpe")
+nat_idx <- which(df$Tag == "B-nat"|df$Tag == "I-nat")
+org_idx <- which(df$Tag == "B-org"|df$Tag == "I-org")
+per_idx <- which(df$Tag == "B-per"|df$Tag == "I-per")
+tim_idx <- which(df$Tag == "B-tim"|df$Tag == "I-tim")
+
+df_combine <- df
+df_combine$Tag <- as.character(df_combine$Tag)
+df_combine$Tag[art_idx] <- "Art"
+df_combine$Tag[eve_idx] <- "Eve"
+df_combine$Tag[geo_idx] <- "Geo"
+df_combine$Tag[gpe_idx] <- "Gpe"
+df_combine$Tag[nat_idx] <- "Nat"
+df_combine$Tag[org_idx] <- "Org"
+df_combine$Tag[per_idx] <- "Per"
+df_combine$Tag[tim_idx] <- "Tim"
+df_combine$Tag <- as.factor(df_combine$Tag)
+table(df_combine$Tag)
+#write.csv(df_combine,"df_combine.csv")
+
+```
+
+## Read Binary Classfication result from combined sample
+```{r}
+result_df <- NULL
+
+art <- read.csv("./combined/pred_result_Art.csv")
+result_df$art_p <- art$pred
+
+gpe <- read.csv("./combined/pred_result_Gpe.csv")
+result_df$gpe_p <- gpe$pred
+
+nat <- read.csv("./combined/pred_result_Nat.csv")
+result_df$nat_p <- nat$pred
+
+org <- read.csv("./combined/pred_result_Org.csv")
+result_df$org_p <- org$pred
+
+per <- read.csv("./combined/pred_result_Per.csv")
+result_df$per_p <- per$pred
+
+geo <- read.csv("./combined/pred_result_Geo.csv")
+result_df$geo_p <- geo$pred
+
+eve <- read.csv("./combined/pred_result_Eve.csv")
+result_df$eve_p <- eve$pred
+
+tim <- read.csv("./combined/pred_result_Tim.csv")
+result_df$tim_p <- tim$pred
+
+
+df_result <- as.data.frame(result_df)
+df_result_p <- df_result
+
+test_data <- read.csv("./combined/df_com_test.csv")
+```
+
+## Draw Roc curve
+```{r}
+roc_xgb.data.art_p <- extract_evaluation(tagName = "Art",colname = "art_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.gpe_p <- extract_evaluation(tagName = "Gpe",colname = "gpe_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.nat_p <- extract_evaluation(tagName = "Nat",colname = "nat_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.org_p <- extract_evaluation(tagName = "Org",colname = "org_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.per_p <- extract_evaluation(tagName = "Per",colname = "per_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.geo_p <- extract_evaluation(tagName = "Geo",colname = "geo_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.eve_p <- extract_evaluation(tagName = "Eve",colname = "eve_p",test_data = test_data, result_data = df_result_p)
+
+roc_xgb.data.tim_p <- extract_evaluation(tagName = "Tim",colname = "tim_p",test_data = test_data, result_data = df_result_p)
+
+
+cols <- c("Art" = "antiquewhite4", "Eve" = "cadetblue4", "Geo" = "aquamarine4", "Gpe" = "chartreuse3", "Nat" = "chocolate3", "Org" = "cornflowerblue", "Per" = "brown3", "Tim" = "darkgoldenrod3")
+
+# Creat roc curve for each class
+proc <- ggplot() + 
+geom_line(data = roc_xgb.data.art_p, aes(x=fpr, y=tpr,colour = "Art"),lwd = 1) + 
+geom_line(data = roc_xgb.data.eve_p, aes(x=fpr, y=tpr,colour = "Eve"),lwd = 1) +
+geom_line(data = roc_xgb.data.geo_p, aes(x=fpr, y=tpr,colour = "Geo"),lwd = 1) +
+geom_line(data = roc_xgb.data.gpe_p, aes(x=fpr, y=tpr,colour = "Gpe"),lwd = 1) +
+geom_line(data = roc_xgb.data.nat_p, aes(x=fpr, y=tpr,colour = "Nat"),lwd = 1) +
+geom_line(data = roc_xgb.data.org_p, aes(x=fpr, y=tpr,colour = "Org"),lwd = 1) +
+geom_line(data = roc_xgb.data.per_p, aes(x=fpr, y=tpr,colour = "Per"),lwd = 1) +
+geom_line(data = roc_xgb.data.tim_p, aes(x=fpr, y=tpr,colour = "Tim"),lwd = 1) +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() + #set themes
+scale_colour_manual(name = "Labels", values = cols) + 
+xlab("False Positive Rate") +
+ylab("True Positive Rate") +
+theme(legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+proc
+
+```
+
+## Draw Confusion Matrix
+```{r}
+draw_confusion_matrix(tagName = "Art",colname = "art_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "antiquewhite4")
+
+draw_confusion_matrix(tagName = "Gpe",colname = "gpe_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "chartreuse3")
+
+draw_confusion_matrix(tagName = "Nat",colname = "nat_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "chocolate3")
+
+draw_confusion_matrix(tagName = "Org",colname = "org_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "cornflowerblue")
+
+draw_confusion_matrix(tagName = "Per",colname = "per_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "brown3")
+
+draw_confusion_matrix(tagName = "Geo",colname = "geo_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "aquamarine4")
+
+draw_confusion_matrix(tagName = "Eve",colname = "eve_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "cadetblue4")
+
+draw_confusion_matrix(tagName = "Tim",colname = "tim_p",test_data = test_data, result_data = df_result_p,thresh = 1,color = "darkgoldenrod3")
+```
+
+## Draw Precision Curve
+```{r}
+prec_xgb.data.art_p <- precision_curve(tagName = "Art",colname = "art_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.gpe_p <- precision_curve(tagName = "Gpe",colname = "gpe_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.nat_p <- precision_curve(tagName = "Nat",colname = "nat_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.org_p <- precision_curve(tagName = "Org",colname = "org_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.per_p <- precision_curve(tagName = "Per",colname = "per_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.geo_p <- precision_curve(tagName = "Geo",colname = "geo_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.eve_p <- precision_curve(tagName = "Eve",colname = "eve_p",test_data = test_data, result_data = df_result_p)
+
+prec_xgb.data.tim_p <- precision_curve(tagName = "Tim",colname = "tim_p",test_data = test_data, result_data = df_result_p)
+
+prec <- ggplot() + 
+geom_line(data = prec_xgb.data.art_p, aes(x=x, y=y,colour = "Art"),lwd = 1) + 
+geom_line(data = prec_xgb.data.eve_p, aes(x=x, y=y,colour = "Eve"),lwd = 1) +
+geom_line(data = prec_xgb.data.geo_p, aes(x=x, y=y,colour = "Geo"),lwd = 1) +
+geom_line(data = prec_xgb.data.gpe_p, aes(x=x, y=y,colour = "Gpe"),lwd = 1) +
+geom_line(data = prec_xgb.data.nat_p, aes(x=x, y=y,colour = "Nat"),lwd = 1) +
+geom_line(data = prec_xgb.data.org_p, aes(x=x, y=y,colour = "Org"),lwd = 1) +
+geom_line(data = prec_xgb.data.per_p, aes(x=x, y=y,colour = "Per"),lwd = 1) +
+geom_line(data = prec_xgb.data.tim_p, aes(x=x, y=y,colour = "Tim"),lwd = 1)+
+xlab("Cutoff") +
+ylab("Precision") +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() +
+theme(legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+prec
+```
+
+## Draw Recall Curve
+```{r}
+rec_xgb.data.art_p <- recall_curve(tagName = "Art",colname = "art_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.gpe_p <- recall_curve(tagName = "Gpe",colname = "gpe_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.nat_p <- recall_curve(tagName = "Nat",colname = "nat_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.org_p <- recall_curve(tagName = "Org",colname = "org_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.per_p <- recall_curve(tagName = "Per",colname = "per_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.geo_p <- recall_curve(tagName = "Geo",colname = "geo_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.eve_p <- recall_curve(tagName = "Eve",colname = "eve_p",test_data = test_data, result_data = df_result_p)
+
+rec_xgb.data.tim_p <- recall_curve(tagName = "Tim",colname = "tim_p",test_data = test_data, result_data = df_result_p)
+
+rec <- ggplot() + 
+geom_line(data = rec_xgb.data.art_p, aes(x=x, y=y,colour = "Art"),lwd = 1) + 
+geom_line(data = rec_xgb.data.eve_p, aes(x=x, y=y,colour = "Eve"),lwd = 1) +
+geom_line(data = rec_xgb.data.geo_p, aes(x=x, y=y,colour = "Geo"),lwd = 1) +
+geom_line(data = rec_xgb.data.gpe_p, aes(x=x, y=y,colour = "Gpe"),lwd = 1) +
+geom_line(data = rec_xgb.data.nat_p, aes(x=x, y=y,colour = "Nat"),lwd = 1) +
+geom_line(data = rec_xgb.data.org_p, aes(x=x, y=y,colour = "Org"),lwd = 1) +
+geom_line(data = rec_xgb.data.per_p, aes(x=x, y=y,colour = "Per"),lwd = 1) +
+geom_line(data = rec_xgb.data.tim_p, aes(x=x, y=y,colour = "Tim"),lwd = 1) +
+xlab("Cutoff") +
+ylab("Recall") +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() +
+theme(legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+rec
+```
+
+
+
+###############################
+## Balance data using SMOTE  ##
+###############################
+
+## Read Binary Classification result from SMOTE sample
+```{r}
+result_df <- NULL
+
+B_art <- read.csv("./balance_model/pred_result_B-art.csv")
+result_df$B_art_p <- B_art$pred
+result_df$B_art_cp <- B_art$pred_cal
+
+I_gpe <- read.csv("./balance_model/pred_result_I-gpe.csv")
+result_df$I_gpe_p <- I_gpe$pred
+result_df$I_gpe_cp <- I_gpe$pred_cal
+
+I_nat <- read.csv("./balance_model/pred_result_I-nat.csv")
+result_df$I_nat_p <- I_nat$pred
+result_df$I_nat_cp <- I_nat$pred_cal
+
+I_org <- read.csv("./balance_model/pred_result_I-org.csv")
+result_df$I_org_p <- I_org$pred
+result_df$I_org_cp <- I_org$pred_cal
+
+I_art <- read.csv("./balance_model/pred_result_I-art.csv")
+result_df$I_art_p <- I_art$pred
+result_df$I_art_cp <- I_art$pred_cal
+
+I_per <- read.csv("./balance_model/pred_result_I-per.csv")
+result_df$I_per_p <- I_per$pred
+result_df$I_per_cp <- I_per$pred_cal
+
+I_geo <- read.csv("./balance_model/pred_result_I-geo.csv")
+result_df$I_geo_p <- I_geo$pred
+result_df$I_geo_cp <- I_geo$pred_cal
+
+B_nat <- read.csv("./balance_model/pred_result_B-nat.csv")
+result_df$B_nat_p <- B_nat$pred
+result_df$B_nat_cp <- B_nat$pred_cal
+
+B_geo <- read.csv("./balance_model/pred_result_B-geo.csv")
+result_df$B_geo_p <- B_geo$pred
+result_df$B_geo_cp <- B_geo$pred_cal
+
+B_gpe <- read.csv("./balance_model/pred_result_B-gpe.csv")
+result_df$B_gpe_p <- B_gpe$pred
+result_df$B_gpe_cp <- B_gpe$pred_cal
+
+B_eve <- read.csv("./balance_model/pred_result_B-eve.csv")
+result_df$B_eve_p <- B_eve$pred
+result_df$B_eve_cp <- B_eve$pred_cal
+
+B_org <- read.csv("./balance_model/pred_result_B-org.csv")
+result_df$B_org_p <- B_org$pred
+result_df$B_org_cp <- B_org$pred_cal
+
+B_per <- read.csv("./balance_model/pred_result_B-per.csv")
+result_df$B_per_p <- B_per$pred
+result_df$B_per_cp <- B_per$pred_cal
+
+I_tim <- read.csv("./balance_model/pred_result_I-tim.csv")
+result_df$I_tim_p <- I_tim$pred
+result_df$I_tim_cp <- I_tim$pred_cal
+
+B_tim <- read.csv("./balance_model/pred_result_B-tim.csv")
+result_df$B_tim_p <- B_tim$pred
+result_df$B_tim_cp <- B_tim$pred_cal
+
+I_eve <- read.csv("./balance_model/pred_result_I-eve.csv")
+result_df$I_eve_p <- I_eve$pred
+result_df$I_eve_cp <- I_eve$pred_cal
+
+
+df_bal_result <- as.data.frame(result_df)
+df_bal_result_p <- df_bal_result[,seq(1,31,2)]
+df_bal_result_cp <- df_bal_result[,seq(2,32,2)]
+
+bal_test_data <- read.csv("./balance_model/df_bal_test.csv")
+```
+
+## Draw Roc curve
+```{r}
+roc_xgb.data.B_art_p <- extract_evaluation(tagName = "B-art",colname = "B_art_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_gpe_p <- extract_evaluation(tagName = "I-gpe",colname = "I_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_nat_p <- extract_evaluation(tagName = "I-nat",colname = "I_nat_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_org_p <- extract_evaluation(tagName = "I-org",colname = "I_org_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_art_p <- extract_evaluation(tagName = "I-art",colname = "I_art_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_per_p <- extract_evaluation(tagName = "I-per",colname = "I_per_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_geo_p <- extract_evaluation(tagName = "I-geo",colname = "I_geo_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_nat_p <- extract_evaluation(tagName = "B-nat",colname = "B_nat_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_geo_p <- extract_evaluation(tagName = "B-geo",colname = "B_geo_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_gpe_p <- extract_evaluation(tagName = "B-gpe",colname = "B_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_eve_p <- extract_evaluation(tagName = "B-eve",colname = "B_eve_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_org_p <- extract_evaluation(tagName = "B-org",colname = "B_org_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_per_p <- extract_evaluation(tagName = "B-per",colname = "B_per_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_tim_p <- extract_evaluation(tagName = "I-tim",colname = "I_tim_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.B_tim_p <- extract_evaluation(tagName = "B-tim",colname = "B_tim_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+roc_xgb.data.I_eve_p <- extract_evaluation(tagName = "I-eve",colname = "I_eve_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+cols <- c("b-art" = "antiquewhite4", "b-eve" = "cadetblue4", "b-geo" = "aquamarine4", "b-gpe" = "chartreuse3", "b-nat" = "chocolate3", "b-org" = "cornflowerblue", "b-per" = "brown3", "b-tim" = "darkgoldenrod3", "i-art" = "darkseagreen3", "i-eve" = "goldenrod3", "i-geo" = "gray", "i-gpe" = "deeppink3", "i-nat" = "lightsalmon", "i-org" = "limegreen", "i-per" = "magenta", "i-tim" = "navyblue")
+
+# Creat roc curve for each class
+proc <- ggplot() + 
+geom_line(data = roc_xgb.data.B_art_p, aes(x=fpr, y=tpr,colour = "b-art"),lwd = 1) + 
+geom_line(data = roc_xgb.data.B_eve_p, aes(x=fpr, y=tpr,colour = "b-eve"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_geo_p, aes(x=fpr, y=tpr,colour = "b-geo"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_gpe_p, aes(x=fpr, y=tpr,colour = "b-gpe"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_nat_p, aes(x=fpr, y=tpr,colour = "b-nat"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_org_p, aes(x=fpr, y=tpr,colour = "b-org"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_per_p, aes(x=fpr, y=tpr,colour = "b-per"),lwd = 1) +
+geom_line(data = roc_xgb.data.B_tim_p, aes(x=fpr, y=tpr,colour = "b-tim"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_art_p, aes(x=fpr, y=tpr,colour = "i-art"),lwd = 1) + 
+geom_line(data = roc_xgb.data.I_eve_p, aes(x=fpr, y=tpr,colour = "i-eve"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_geo_p, aes(x=fpr, y=tpr,colour = "i-geo"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_gpe_p, aes(x=fpr, y=tpr,colour = "i-gpe"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_nat_p, aes(x=fpr, y=tpr,colour = "i-nat"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_org_p, aes(x=fpr, y=tpr,colour = "i-org"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_per_p, aes(x=fpr, y=tpr,colour = "i-per"),lwd = 1) +
+geom_line(data = roc_xgb.data.I_tim_p, aes(x=fpr, y=tpr,colour = "i-tim"),lwd = 1) +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() + #set themes
+scale_colour_manual(name = "Labels", values = cols) + 
+xlab("False Positive Rate") +
+ylab("True Positive Rate") +
+theme(legend.position = c(0.95, 0.5), 
+legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+proc
+```
+
+# Draw Confusion Matrix
+```{r, warning = FALSE}
+draw_confusion_matrix(tagName = "B-art",colname = "B_art_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "antiquewhite4")
+
+draw_confusion_matrix(tagName = "I-gpe",colname = "I_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "deeppink3")
+
+draw_confusion_matrix(tagName = "I-nat",colname = "I_nat_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "lightsalmon")
+
+draw_confusion_matrix(tagName = "I-org",colname = "I_org_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "limegreen")
+
+draw_confusion_matrix(tagName = "I-art",colname = "I_art_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "darkseagreen3")
+
+draw_confusion_matrix(tagName = "I-per",colname = "I_per_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "magenta")
+
+
+draw_confusion_matrix(tagName = "I-geo",colname = "I_geo_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "gray")
+
+draw_confusion_matrix(tagName = "B-geo",colname = "B_geo_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "aquamarine4")
+
+draw_confusion_matrix(tagName = "B-gpe",colname = "B_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "chartreuse3")
+
+draw_confusion_matrix(tagName = "B-eve",colname = "B_eve_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "cadetblue4")
+
+draw_confusion_matrix(tagName = "B-org",colname = "B_org_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "cornflowerblue")
+
+draw_confusion_matrix(tagName = "B-per",colname = "B_per_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "brown3")
+
+draw_confusion_matrix(tagName = "I-tim",colname = "I_tim_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "navyblue")
+
+draw_confusion_matrix(tagName = "B-tim",colname = "B_tim_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 0.2,color = "darkgoldenrod3")
+
+draw_confusion_matrix(tagName = "I-eve",colname = "I_eve_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "goldenrod3")
+
+draw_confusion_matrix(tagName = "B-nat",colname = "B_nat_p",test_data = bal_test_data, result_data = df_bal_result_p,thresh = 1,color = "chocolate3")
+```
+
+# Draw Precision curve 
+```{r}
+prec_xgb.data.B_art_p <- precision_curve(tagName = "B-art",colname = "B_art_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_gpe_p <- precision_curve(tagName = "I-gpe",colname = "I_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_nat_p <- precision_curve(tagName = "I-nat",colname = "I_nat_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_org_p <- precision_curve(tagName = "I-org",colname = "I_org_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_art_p <- precision_curve(tagName = "I-art",colname = "I_art_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_per_p <- precision_curve(tagName = "I-per",colname = "I_per_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_geo_p <- precision_curve(tagName = "I-geo",colname = "I_geo_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_nat_p <- precision_curve(tagName = "B-nat",colname = "B_nat_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_geo_p <- precision_curve(tagName = "B-geo",colname = "B_geo_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_gpe_p <- precision_curve(tagName = "B-gpe",colname = "B_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_eve_p <- precision_curve(tagName = "B-eve",colname = "B_eve_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_org_p <- precision_curve(tagName = "B-org",colname = "B_org_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_per_p <- precision_curve(tagName = "B-per",colname = "B_per_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_tim_p <- precision_curve(tagName = "I-tim",colname = "I_tim_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.B_tim_p <- precision_curve(tagName = "B-tim",colname = "B_tim_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec_xgb.data.I_eve_p <- precision_curve(tagName = "I-eve",colname = "I_eve_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+prec <- ggplot() + 
+geom_line(data = prec_xgb.data.B_art_p, aes(x=x, y=y,colour = "b-art"),lwd = 1) + 
+geom_line(data = prec_xgb.data.B_eve_p, aes(x=x, y=y,colour = "b-eve"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_geo_p, aes(x=x, y=y,colour = "b-geo"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_gpe_p, aes(x=x, y=y,colour = "b-gpe"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_nat_p, aes(x=x, y=y,colour = "b-nat"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_org_p, aes(x=x, y=y,colour = "b-org"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_per_p, aes(x=x, y=y,colour = "b-per"),lwd = 1) +
+geom_line(data = prec_xgb.data.B_tim_p, aes(x=x, y=y,colour = "b-tim"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_art_p, aes(x=x, y=y,colour = "i-art"),lwd = 1) + 
+geom_line(data = prec_xgb.data.I_eve_p, aes(x=x, y=y,colour = "i-eve"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_geo_p, aes(x=x, y=y,colour = "i-geo"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_gpe_p, aes(x=x, y=y,colour = "i-gpe"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_nat_p, aes(x=x, y=y,colour = "i-nat"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_org_p, aes(x=x, y=y,colour = "i-org"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_per_p, aes(x=x, y=y,colour = "i-per"),lwd = 1) +
+geom_line(data = prec_xgb.data.I_tim_p, aes(x=x, y=y,colour = "i-tim"),lwd = 1) +
+xlab("Cutoff") +
+ylab("Precision") +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() +
+theme(legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+prec
+```
+
+## Draw Recall curve
+```{r}
+rec_xgb.data.B_art_p <- recall_curve(tagName = "B-art",colname = "B_art_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_gpe_p <- recall_curve(tagName = "I-gpe",colname = "I_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_nat_p <- recall_curve(tagName = "I-nat",colname = "I_nat_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_org_p <- recall_curve(tagName = "I-org",colname = "I_org_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_art_p <- recall_curve(tagName = "I-art",colname = "I_art_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_per_p <- recall_curve(tagName = "I-per",colname = "I_per_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_geo_p <- recall_curve(tagName = "I-geo",colname = "I_geo_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_nat_p <- recall_curve(tagName = "B-nat",colname = "B_nat_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_geo_p <- recall_curve(tagName = "B-geo",colname = "B_geo_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_gpe_p <- recall_curve(tagName = "B-gpe",colname = "B_gpe_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_eve_p <- recall_curve(tagName = "B-eve",colname = "B_eve_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_org_p <- recall_curve(tagName = "B-org",colname = "B_org_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_per_p <- recall_curve(tagName = "B-per",colname = "B_per_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_tim_p <- recall_curve(tagName = "I-tim",colname = "I_tim_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.B_tim_p <- recall_curve(tagName = "B-tim",colname = "B_tim_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec_xgb.data.I_eve_p <- recall_curve(tagName = "I-eve",colname = "I_eve_p",test_data = bal_test_data, result_data = df_bal_result_p)
+
+rec <- ggplot() + 
+geom_line(data = rec_xgb.data.B_art_p, aes(x=x, y=y,colour = "b-art"),lwd = 1) + 
+geom_line(data = rec_xgb.data.B_eve_p, aes(x=x, y=y,colour = "b-eve"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_geo_p, aes(x=x, y=y,colour = "b-geo"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_gpe_p, aes(x=x, y=y,colour = "b-gpe"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_nat_p, aes(x=x, y=y,colour = "b-nat"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_org_p, aes(x=x, y=y,colour = "b-org"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_per_p, aes(x=x, y=y,colour = "b-per"),lwd = 1) +
+geom_line(data = rec_xgb.data.B_tim_p, aes(x=x, y=y,colour = "b-tim"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_art_p, aes(x=x, y=y,colour = "i-art"),lwd = 1) + 
+geom_line(data = rec_xgb.data.I_eve_p, aes(x=x, y=y,colour = "i-eve"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_geo_p, aes(x=x, y=y,colour = "i-geo"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_gpe_p, aes(x=x, y=y,colour = "i-gpe"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_nat_p, aes(x=x, y=y,colour = "i-nat"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_org_p, aes(x=x, y=y,colour = "i-org"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_per_p, aes(x=x, y=y,colour = "i-per"),lwd = 1) +
+geom_line(data = rec_xgb.data.I_tim_p, aes(x=x, y=y,colour = "i-tim"),lwd = 1) +
+xlab("Cutoff") +
+ylab("Recall") +
+geom_vline(xintercept = 0.5, color = "red", linetype=2) + theme_bw() +
+theme(legend.text = element_text(size = 15), 
+legend.title = element_text(size = 15),
+axis.title.x = element_text(size = 15),
+axis.title.y = element_text(size = 15))
+
+rec
+```

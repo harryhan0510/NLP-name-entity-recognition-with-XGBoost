@@ -1,0 +1,21 @@
+{
+    "collab_server" : "",
+    "contents" : "extract_evaluation <- function(tagName,colname,test_data,result_data)\n{\n  xgb_pred <- result_data[colname]\n  test_Y <- test_data$Tag\n  test_Y <- ifelse(test_Y == tagName,1,0)\n  \n  ROCRpred_xgb <- prediction(xgb_pred, test_Y)\n  perf_xgb <- performance(ROCRpred_xgb, 'tpr','fpr')\t\t\t\t\t\n  roc_xgb.data <- data.frame(fpr=unlist(perf_xgb@x.values),\n                             tpr=unlist(perf_xgb@y.values))\n  return(roc_xgb.data)\n}\n\n\nget_cutoff_point <- function(perf, threshold)\n{\n  cutoffs <- data.frame(cut=perf@alpha.values[[1]], fpr=perf@x.values[[1]], tpr=perf@y.values[[1]])\n  cutoffs <- cutoffs[order(cutoffs$tpr, decreasing=TRUE),]\n  cutoffs <- subset(cutoffs, fpr <= threshold)\n  if(nrow(cutoffs) == 0){ return(1.0)}\n  else return(cutoffs[1, 1])\n}\n\nconfusion_matrix <- function(cm, auc, color) {\n  \n  layout(matrix(c(1,1,2)))\n  par(mar=c(0,0.1,1,0.1))\n  plot(c(125, 345), c(300, 450), type = \"n\", xlab=\"\", ylab=\"\", xaxt='n', yaxt='n')\n  \n  # create the matrix \n  rect(150, 430, 240, 370, col=color)\n  text(195, 435, '0', cex=1.2)\n  rect(250, 430, 340, 370, col='white')\n  text(295, 435, '1', cex=1.2)\n  text(125, 370, 'Predicted', cex=1.3, srt=90, font=2)\n  text(245, 450, 'Actual', cex=1.3, font=2)\n  rect(150, 305, 240, 365, col='white')\n  rect(250, 305, 340, 365, col=color)\n  text(140, 400, '0', cex=1.2, srt=90)\n  text(140, 335, '1', cex=1.2, srt=90)\n  \n  # add in the cm results \n  res <- as.numeric(cm$table)\n  text(195, 400, res[1], cex=1.6, font=2, col='white')\n  text(195, 335, res[2], cex=1.6, font=2, col='black')\n  text(295, 400, res[3], cex=1.6, font=2, col='black')\n  text(295, 335, res[4], cex=1.6, font=2, col='white')\n  \n  # add in the specifics \n  plot(c(0, 100), c(0, 50), type = \"n\", xlab=\"\", ylab=\"\", main = \"\", xaxt='n', yaxt='n')\n  \n  # add in the accuracy information \n  \n  text(25, 30, \"AUC\", cex=1.8, font=2)\n  text(25, 20, round(as.numeric(auc), 3), cex=1.8)\n  text(75, 30, names(cm$overall[1]), cex=1.8, font=2)\n  text(75, 20, round(as.numeric(cm$overall[1]), 3), cex=1.8)\n}\n\ndraw_confusion_matrix <- function(tagName,colname,test_data,result_data,thresh,color)\n{\n  xgb_pred <- result_data[colname]\n  test_Y <- test_data$Tag\n  test_Y <- ifelse(test_Y == tagName,1,0)\n  \n  ROCRpred_xgb <- prediction(xgb_pred, test_Y)\n  \n  auc_xgb <- performance(ROCRpred_xgb, measure = \"auc\")\n  \n  perf_xgb <- performance(ROCRpred_xgb, 'tpr','fpr')\n  \n  cut <- get_cutoff_point(perf_xgb, thresh)\n  \n  pred_values_xgb <- ifelse(xgb_pred > cut,1,0)\n  \n  cm_xgb <- confusionMatrix(data = pred_values_xgb, reference = test_Y)\n  \n  confusion_matrix(cm_xgb, auc_xgb@y.values, color)\n}\n\nprecision_curve <- function(tagName,colname,test_data,result_data)\n{\n  xgb_pred <- result_data[colname]\n  test_Y <- test_data$Tag\n  test_Y <- ifelse(test_Y == tagName,1,0)\n  ROCRpred_xgb <- prediction(xgb_pred, test_Y)\n  perf_xgb <- performance(ROCRpred_xgb,'prec', 'cutoff') #use 'prec' and 'cutoff' as measurements\t\t\t\t\t\n  xgb.data <- data.frame(x=unlist(perf_xgb@x.values), y=unlist(perf_xgb@y.values))\n  return(xgb.data)\n}\n\nrecall_curve <- function(tagName,colname,test_data,result_data)\n{\n  xgb_pred <- result_data[colname]\n  test_Y <- test_data$Tag\n  test_Y <- ifelse(test_Y == tagName,1,0)\n  ROCRpred_xgb <- prediction(xgb_pred, test_Y)\n  perf_xgb <- performance(ROCRpred_xgb,'rec', 'cutoff')\n  xgb.data <- data.frame(x=unlist(perf_xgb@x.values), y=unlist(perf_xgb@y.values))\n  return(xgb.data)\n}",
+    "created" : 1516033754190.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2248144183",
+    "id" : "9C275D15",
+    "lastKnownWriteTime" : 1513301788,
+    "last_content_update" : 1513301788,
+    "path" : "C:/Users/harryhan/Desktop/SFL_Scientific/interview/r/func.R",
+    "project_path" : "func.R",
+    "properties" : {
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
